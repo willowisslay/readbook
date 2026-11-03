@@ -1,7 +1,10 @@
 import { ListenSession } from './listen-session.js';
 import { createSpeechSource } from './reading-pages.js';
+import { cleanSpeechText, prepareSpeechText } from './speech-text.js';
+import { ListeningWakeLock } from './listening-wake-lock.js';
 const $=(s,r=document)=>r.querySelector(s);
 const app=$('#app'),modal=$('#modal');
+const listeningWakeLock=new ListeningWakeLock({onUnavailable:()=>toast('Your browser couldn’t keep the screen awake. Check your screen timeout setting.')});
 let books=[],book=null,chapterIndex=0,page=0,pages=1,reading=false,query='',filter='all',speaking=false,speechGeneration=0;
 let ttsAvailable=false,listenSession=null,pageSource=null;
 let prefs={engine:'kokoro',kokoroVoice:'af_heart',theme:'paper',size:20,line:1.8,font:'serif',width:680,rate:1,voice:''};
@@ -25,6 +28,7 @@ function chapterHTML(c){return c.format==='md'?markdown(c.content):c.content.spl
 function stopSpeech(){
   speechGeneration++;
   speaking=false;
+  listeningWakeLock.setActive(false);
   listenSession?.stop();listenSession=null;
   pageSource?.dispose();pageSource=null;
   window.speechSynthesis?.cancel();
@@ -68,14 +72,15 @@ function waitForRetry(ms,signal){
   });
 }
 async function generatePageAudio(position,signal){
-  if(!position.text)return null;
+  const input=cleanSpeechText(position.text);
+  if(!input)return null;
   // Another tab may still be releasing its worker. Retry busy responses rather
   // than skipping a page or letting speculative generation interrupt playback.
   for(let attempt=0;;attempt++){
     signal.throwIfAborted();
     let response;
     try{
-      response=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input:position.text,voice:prefs.kokoroVoice,speed:Number(prefs.rate)||1}),signal});
+      response=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input,voice:prefs.kokoroVoice,speed:Number(prefs.rate)||1}),signal});
     }catch(error){
       if(signal.aborted||attempt>=3)throw error;
       await waitForRetry(1000*(attempt+1),signal);continue;
@@ -91,6 +96,11 @@ async function generatePageAudio(position,signal){
 function playPageAudio(audioData,signal,position){
   if(!audioData)return Promise.resolve();
   const {blob}=audioData;
+  const prepared=prepareSpeechText(position.text);
+  const pageBreaks=position.pageBreaks?.map(boundary=>{
+    const index=prepared.offsets.findIndex(offset=>offset>=boundary.offset);
+    return {...boundary,fraction:index<0?1:index/Math.max(1,prepared.text.length)};
+  });
   return new Promise((resolve,reject)=>{
     const audio=$('#audio-controls audio');
     const url=URL.createObjectURL(blob);
@@ -103,9 +113,9 @@ function playPageAudio(audioData,signal,position){
       error?reject(error):resolve();
     };
     const follow=()=>{
-      if(!audio.duration||!position.pageBreaks)return;
+      if(!audio.duration||!pageBreaks)return;
       const fraction=audio.currentTime/audio.duration;
-      const marker=position.pageBreaks.findLast(boundary=>boundary.fraction<=fraction);
+      const marker=pageBreaks.findLast(boundary=>boundary.fraction<=fraction);
       if(marker&&marker.page!==page)showListeningPage({...position,page:marker.page});
     };
     const ended=()=>finish();
@@ -122,7 +132,8 @@ function speakDevicePage(position,generation){
   if(!speaking||generation!==speechGeneration)return;
   if(!position){stopSpeech();toast('You’ve reached the end of the book.');return;}
   showListeningPage(position);
-  const chunks=position.text?[position.text]:[];
+  const prepared=prepareSpeechText(position.text);
+  const chunks=prepared.text?[prepared.text]:[];
   let index=0, spoken=0;
   const next=()=>{
     if(!speaking||generation!==speechGeneration)return;
@@ -135,7 +146,7 @@ function speakDevicePage(position,generation){
     spoken+=chunk.length;
     const utterance=new SpeechSynthesisUtterance(chunk);
     utterance.onboundary=event=>{
-      const marker=position.pageBreaks?.findLast(boundary=>boundary.offset<=start+event.charIndex);
+      const marker=position.pageBreaks?.findLast(boundary=>boundary.offset<=(prepared.offsets[start+event.charIndex]??position.text.length));
       if(generation===speechGeneration&&marker&&marker.page!==page)showListeningPage({...position,page:marker.page});
     };
     utterance.rate=Number(prefs.rate)||1;
@@ -154,7 +165,7 @@ function speak(){
   try{
     pageSource=createSpeechSource(book.chapters,$('.reader'),$('.page-window'),chapterHTML);
     const current=pageSource.at(chapterIndex,page);
-    speaking=true;const generation=++speechGeneration;
+    speaking=true;listeningWakeLock.setActive(true);const generation=++speechGeneration;
     if(prefs.engine!=='kokoro'){speakDevicePage(current,generation);return;}
     listenSession=new ListenSession({
       nextPage:position=>pageSource.next(position),

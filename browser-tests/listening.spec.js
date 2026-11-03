@@ -23,6 +23,14 @@ async function openBook(page) {
   await page.request.post(`/api/books/${id}/chapters`, { data: { title: 'Coming home', content: 'The final chapter. We are home at last.', format: 'txt', position: 2 } });
   await page.addInitScript(() => {
     HTMLMediaElement.prototype.play = function () { return Promise.resolve(); };
+    window.wakeRequests=0;window.wakeReleases=0;
+    Object.defineProperty(navigator,'wakeLock',{configurable:true,value:{request:async type=>{
+      if(type!=='screen')throw Error('Wrong wake-lock type');
+      window.wakeRequests++;
+      const sentinel=new EventTarget();
+      sentinel.release=async()=>{window.wakeReleases++;sentinel.dispatchEvent(new Event('release'));};
+      return sentinel;
+    }}});
   });
   await page.goto('/');
   await page.locator(`[data-book="${id}"]`).click();
@@ -259,4 +267,54 @@ test('startup buffering offers Play now when the first group is ready', async ({
   await expect(page.getByRole('button',{name:'Play now',exact:true})).toBeHidden();
   await page.getByRole('button',{name:'Stop listening',exact:true}).click();
   release();
+});
+
+test('Kokoro and device voices narrate cleaned prose while chapters stay unchanged', async ({ page }) => {
+  const {id}=await openBook(page);
+  const raw=String.raw`She \*whispered\*, \"hello\". An un**break**able promise. [Read me](https://example.com).`;
+  const expected='She whispered, "hello". An unbreakable promise. Read me.';
+  const book=await(await page.request.get(`/api/books/${id}`)).json();
+  await page.request.put(`/api/books/${id}/chapters/${book.chapters[0].id}`,{data:{title:'Formatting',content:raw,format:'txt',position:1}});
+  await page.getByRole('button',{name:'Back',exact:true}).click();
+  await page.locator('[data-action=start]').click();
+  const requests=await mockSpeech(page);
+  await page.getByRole('button',{name:'Listen',exact:true}).click();
+  await expect.poll(()=>requests.length).toBeGreaterThan(0);
+  expect(requests[0].input).toBe(expected);
+  await expect(page.locator('audio')).toHaveAttribute('src',/^blob:/);
+  await expect(page.locator('.page-content').first()).toContainText(raw);
+  expect((await(await page.request.get(`/api/books/${id}`)).json()).chapters[0].content).toBe(raw);
+  await expect.poll(()=>page.evaluate(()=>window.wakeRequests)).toBe(1);
+  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.wakeReleases)).toBe(1);
+  await page.evaluate(()=>{
+    window.spoken=[];
+    Object.defineProperty(window,'speechSynthesis',{configurable:true,value:{getVoices:()=>[],speak:utterance=>window.spoken.push(utterance.text),cancel:()=>{}}});
+  });
+  await page.getByRole('button',{name:'Appearance',exact:true}).click();
+  await page.locator('[data-pref=engine]').selectOption('device');
+  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await page.getByRole('button',{name:'Listen',exact:true}).click();
+  expect(await page.evaluate(()=>window.spoken[0])).toBe(expected);
+  await expect.poll(()=>page.evaluate(()=>window.wakeRequests)).toBe(2);
+  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.wakeReleases)).toBe(2);
+});
+
+test('wake lock is reacquired on return and denial does not interrupt narration', async ({ page }) => {
+  await openBook(page);await mockSpeech(page);
+  await page.getByRole('button',{name:'Listen',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.wakeRequests)).toBe(1);
+  await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});document.dispatchEvent(new Event('visibilitychange'));});
+  await expect.poll(()=>page.evaluate(()=>window.wakeReleases)).toBe(1);
+  await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});document.dispatchEvent(new Event('visibilitychange'));});
+  await expect.poll(()=>page.evaluate(()=>window.wakeRequests)).toBe(2);
+  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.wakeReleases)).toBe(2);
+  await page.evaluate(()=>{navigator.wakeLock.request=async()=>{window.wakeRequests++;throw new DOMException('Denied','NotAllowedError');};});
+  await page.getByRole('button',{name:'Listen',exact:true}).click();
+  await expect(page.locator('audio')).toHaveAttribute('src',/^blob:/);
+  await expect(page.locator('#toast')).toContainText('couldn’t keep the screen awake');
+  await expect.poll(()=>page.evaluate(()=>window.wakeRequests)).toBe(3);
+  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
 });

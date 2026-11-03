@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { generateSpeech } from './tts.js';
+import { cleanSpeechText } from './public/speech-text.js';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
@@ -14,8 +15,8 @@ CREATE TABLE IF NOT EXISTS chapters(id TEXT PRIMARY KEY,book_id TEXT NOT NULL RE
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS progress(book_id TEXT PRIMARY KEY REFERENCES books(id) ON DELETE CASCADE,chapter_id TEXT,offset REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS preferences(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL);`);
-const assets=new Map(['index.html','app.js','listen-session.js','reading-pages.js','speech-chunks.js','style.css','icon.svg'].map(f=>['/'+(f==='index.html'?'':f),readFileSync(new URL('./public/'+f,import.meta.url))]));
-const types={'/':'text/html','/app.js':'text/javascript','/listen-session.js':'text/javascript','/reading-pages.js':'text/javascript','/speech-chunks.js':'text/javascript','/style.css':'text/css','/icon.svg':'image/svg+xml'};
+const assets=new Map(['index.html','app.js','listen-session.js','reading-pages.js','speech-chunks.js','speech-text.js','listening-wake-lock.js','style.css','icon.svg'].map(f=>['/'+(f==='index.html'?'':f),readFileSync(new URL('./public/'+f,import.meta.url))]));
+const types={'/':'text/html','/app.js':'text/javascript','/listen-session.js':'text/javascript','/reading-pages.js':'text/javascript','/speech-chunks.js':'text/javascript','/speech-text.js':'text/javascript','/listening-wake-lock.js':'text/javascript','/style.css':'text/css','/icon.svg':'image/svg+xml'};
 const hash=s=>createHash('sha256').update(s).digest(); const attempts=new Map();
 const id=()=>randomBytes(16).toString('hex');
 function text(v,max,required=false){if(typeof v!=='string'||v.length>max||(required&&!v.trim()))throw Object.assign(new Error('Please check the fields and upload sizes.'),{status:400});return v.trim();}
@@ -47,7 +48,8 @@ if(!session){send(401,{error:'Please unlock your library.'});return;}
 if(p==='/api/tts'&&req.method==='GET'){send(200,{available:process.env.TTS_ENABLED!=='false',builtin:true});return;}
 if(p==='/api/tts'&&req.method==='POST'){
 if(process.env.TTS_ENABLED==='false'){send(503,{error:'Built-in speech is disabled. Choose device voices.'});return;}
-const b=await body(req),input=text(b.input,6000,true),voice=text(b.voice||'af_heart',80,true);
+const b=await body(req),input=cleanSpeechText(text(b.input,6000,true)),voice=text(b.voice||'af_heart',80,true);
+if(!input){send(400,{error:'No readable text to speak.'});return;}
 if(!/^[ab][fm]_[a-z0-9_]+$/.test(voice)||!Number.isFinite(b.speed)||b.speed<0.5||b.speed>2){send(400,{error:'Invalid voice or speed'});return;}
 const controller=new AbortController();
 const disconnected=()=>{if(!res.writableEnded)controller.abort();};

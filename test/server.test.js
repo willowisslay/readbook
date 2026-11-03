@@ -15,6 +15,7 @@ assert.equal((await request('/api/tts','POST',{input:'Private text',voice:'af_he
 assert.equal((await request('/api/login','POST',{password:'wrong'},false)).status,401);
 let r=await request('/api/login','POST',{password:'a-good-test-password'},false);assert.equal(r.status,200);cookie=r.headers.get('set-cookie').split(';')[0];assert.match(r.headers.get('set-cookie'),/HttpOnly/);
 assert.deepEqual(await(await request('/api/tts')).json(),{available:true,builtin:true});
+assert.equal((await request('/api/tts','POST',{input:'***',voice:'af_heart',speed:1})).status,400);
 assert.equal((await request('/api/tts','POST',{input:'Test',voice:'invalid',speed:1})).status,400);
 assert.equal((await request('/api/tts','POST',{input:'Test',voice:'af_heart',speed:9})).status,400);
 r=await request('/api/books','POST',{title:'A quiet book',description:'Description',cover:''});assert.equal(r.status,201);const book=(await r.json()).id;
