@@ -130,3 +130,62 @@ test('stopping before the first audio is ready prevents late playback', async ()
   assert.deepEqual(state.generated, [0]);
   assert.equal(state.session.entries.length, 0);
 });
+
+test('sentence-sized chunks obey the visual page horizon rather than a chunk count', async () => {
+  const generated = [], requests = [], plays = [];
+  const session = new ListenSession({
+    maxEntries: 64,
+    canPrefetch: (current,next) => next.endOrdinal <= current.pageOrdinal + 5,
+    nextPage: current => current.number < 35 ? {number:current.number+1,pageOrdinal:Math.floor((current.number+1)/3),endOrdinal:Math.floor((current.number+1)/3)} : null,
+    generate: page => {generated.push(page.number);const pending=deferred();requests.push(pending);return pending.promise;},
+    play: () => {const pending=deferred();plays.push(pending);return pending.promise;},
+    onPage: () => {},
+  });
+  session.start({number:0,pageOrdinal:0,endOrdinal:0});
+  for(let i=0;i<18;i++){requests[i].resolve({duration:1});await tick();}
+  assert.equal(generated.length,18);
+  assert.equal(session.entries.at(-1).page.endOrdinal,5);
+  for(let i=0;i<3;i++){plays[i].resolve();await tick();}
+  for(let i=18;i<21;i++){requests[i].resolve({duration:1});await tick();}
+  assert.equal(generated.length,21);
+  assert.equal(session.entries[0].page.pageOrdinal,1);
+  assert.equal(session.entries.at(-1).page.endOrdinal,6);
+  session.stop();
+});
+
+test('builds a short startup reserve before playback and allows Play now to bypass the wait', async () => {
+  const requests=[], played=[];
+  const session=new ListenSession({
+    startupBufferSeconds:15,
+    nextPage: current=>current.number<3?{number:current.number+1}:null,
+    generate:()=>{const pending=deferred();requests.push(pending);return pending.promise;},
+    play:audio=>{played.push(audio);return new Promise(()=>{});},
+    onPage:()=>{},
+  });
+  session.start({number:0});
+  requests[0].resolve({duration:10});await tick();
+  assert.equal(session.startupWaiting,true);
+  assert.equal(played.length,0);
+  requests[1].resolve({duration:5});await tick();
+  assert.equal(played.length,0);
+  session.beginPlayback();await tick();
+  assert.equal(played.length,1);
+  assert.equal(session.startupWaiting,false);
+  session.stop();
+});
+
+test('automatically starts once the future-audio reserve reaches fifteen seconds', async () => {
+  const requests=[],played=[];
+  const session=new ListenSession({
+    startupBufferSeconds:15,
+    nextPage:current=>current.number<2?{number:current.number+1}:null,
+    generate:()=>{const pending=deferred();requests.push(pending);return pending.promise;},
+    play:audio=>{played.push(audio);return new Promise(()=>{});},
+    onPage:()=>{},
+  });
+  session.start({number:0});requests[0].resolve({duration:10});await tick();
+  requests[1].resolve({duration:16});await tick();
+  assert.equal(played.length,1);
+  assert.equal(session.startupWaiting,false);
+  session.stop();
+});

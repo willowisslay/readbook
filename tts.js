@@ -1,14 +1,30 @@
-import { Worker } from 'node:worker_threads';
+import { fork } from 'node:child_process';
 import path from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { SpeechCache, speechKey } from './speech-cache.js';
 
 export function createSpeechGenerator({
-  createWorker = cacheDir => new Worker(new URL('./tts-worker.js', import.meta.url), { workerData: { cacheDir } }),
+  createWorker = cacheDir => {
+    // ONNX's native binding cannot reliably reinitialize in a second worker
+    // thread. A child process keeps recovery isolated without another service.
+    const child = fork(new URL('./tts-worker.js', import.meta.url), [cacheDir], {
+      serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    });
+    child.postMessage = message => child.send(message);
+    child.terminate = () => child.kill();
+    return child;
+  },
   timeoutMs = 300000,
+  cacheBytes = Math.max(0, Math.min(2048, Number(process.env.TTS_CACHE_MB ?? 256) || 0)) * 1024 * 1024,
 } = {}) {
   let worker = null, busy = false;
+  const caches = new Map();
   return function generateSpeech(input, voice, speed, dataDir, signal) {
     if (signal?.aborted) return Promise.reject(signal.reason);
+    if (!caches.has(dataDir)) caches.set(dataDir, new SpeechCache(path.resolve(dataDir, 'audio-cache'), cacheBytes));
+    const cache = caches.get(dataDir), key = speechKey(input, voice, speed);
+    const cached = cache.get(key);
+    if (cached) return Promise.resolve(cached);
     if (busy) throw Object.assign(Error('Speech is busy. Please try again shortly.'), { status: 429 });
     busy = true;
     return new Promise((resolve, reject) => {
@@ -31,16 +47,22 @@ export function createSpeechGenerator({
       const onMessage = result => {
         if (result.error) { fail(unavailable(result.error)); return; }
         finish();
-        resolve(Buffer.from(result.audio));
+        if (result.cancelled) return;
+        const audio = Buffer.from(result.audio);
+        cache.put(key, audio);
+        resolve(audio);
       };
       const onError = error => {
         console.error('Kokoro worker failed:', error.message);
         fail(unavailable('Speech engine could not start. Try device voices.'));
       };
       const onExit = () => fail(unavailable('Speech engine stopped. Try device voices.'));
-      // Aborting a speculative request must also stop CPU work, otherwise a new
-      // voice/layout can be blocked behind audio the reader no longer needs.
-      const onAbort = () => fail(signal.reason);
+      // Cooperative cancellation preserves the loaded model. Destroying it on
+      // every stop or resize makes the next Listen pay the cold-start cost again.
+      const onAbort = () => {
+        reject(signal.reason);
+        current?.postMessage({ type: 'cancel' });
+      };
       try {
         if (!worker) {
           const cacheDir = path.resolve(dataDir, 'models');

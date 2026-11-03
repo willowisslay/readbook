@@ -12,7 +12,7 @@ class FakeWorker extends EventEmitter {
   terminate() { this.terminated = true; }
 }
 
-test('cancelling prefetch terminates CPU work and frees the worker for a new voice', async () => {
+test('cancelling prefetch preserves the model and releases it after cooperative cancellation', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'readbook-tts-'));
   try {
     const workers = [];
@@ -24,17 +24,18 @@ test('cancelling prefetch terminates CPU work and frees the worker for a new voi
     assert.throws(() => generate('another tab', 'af_heart', 1, dir), error => error.status === 429);
     controller.abort();
     await assert.rejects(first, error => error.name === 'AbortError');
-    assert.equal(workers[0].terminated, true);
+    assert.equal(workers[0].terminated, undefined);
+    assert.deepEqual(workers[0].message, {type:'cancel'});
+    workers[0].emit('message', {cancelled:true});
     assert.equal(workers[0].listenerCount('message'), 0);
     const next = generate('new page', 'bf_emma', 1.2, dir);
-    assert.equal(workers.length, 2);
-    assert.equal(workers[1].message.voice, 'bf_emma');
-    workers[0].emit('message', { audio: new Uint8Array([99]) });
-    workers[1].emit('message', { audio: new Uint8Array([1, 2, 3]) });
+    assert.equal(workers.length, 1);
+    assert.equal(workers[0].message.voice, 'bf_emma');
+    workers[0].emit('message', { audio: new Uint8Array([1, 2, 3]) });
     assert.deepEqual(await next, Buffer.from([1, 2, 3]));
     const reused = generate('next page', 'bf_emma', 1.2, dir);
-    assert.equal(workers.length, 2);
-    workers[1].emit('message', { audio: new Uint8Array([4]) });
+    assert.equal(workers.length, 1);
+    workers[0].emit('message', { audio: new Uint8Array([4]) });
     await reused;
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

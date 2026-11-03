@@ -6,3 +6,4 @@
 
 #audio-controls{height:48px;display:block}#audio-controls[hidden] audio{visibility:hidden}
 #listen-status{min-height:18px;font-size:10px;line-height:18px;opacity:.65;text-align:center;white-space:nowrap}
+#listen-start-now{position:absolute;top:0;left:50%;transform:translateX(-50%);z-index:1;white-space:nowrap}

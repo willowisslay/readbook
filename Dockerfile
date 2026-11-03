@@ -4,7 +4,7 @@ WORKDIR /app
 ENV ONNXRUNTIME_NODE_INSTALL_CUDA=skip
 COPY --chown=node:node package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY --chown=node:node server.js tts.js tts-worker.js ./
+COPY --chown=node:node server.js tts.js tts-worker.js speech-cache.js audio.js ./
 COPY --chown=node:node public ./public
 RUN mkdir -p /data && chown node:node /data
 USER node

@@ -1,5 +1,5 @@
 import { ListenSession } from './listen-session.js';
-import { createPageSource } from './reading-pages.js';
+import { createSpeechSource } from './reading-pages.js';
 const $=(s,r=document)=>r.querySelector(s);
 const app=$('#app'),modal=$('#modal');
 let books=[],book=null,chapterIndex=0,page=0,pages=1,reading=false,query='',filter='all',speaking=false,speechGeneration=0;
@@ -31,10 +31,11 @@ function stopSpeech(){
   const audio=$('#audio-controls audio');
   if(audio){audio.pause();audio.removeAttribute('src');audio.load();}
   const controls=$('#audio-controls');if(controls)controls.hidden=true;
+  const playNow=$('#listen-start-now');if(playNow)playNow.hidden=true;
   const status=$('#listen-status');if(status)status.textContent='';
   const b=$('[data-action="speak"]');if(b)b.innerHTML='<span aria-hidden="true">▷</span> Listen';
 }
-function startReader(index,offset=0){stopSpeech();chapterIndex=index;page=0;reading=true;document.body.className='reader-mode';const c=book.chapters[index];app.innerHTML=`<main class="reader" data-theme="${esc(prefs.theme)}"><header class="reader-header">${button('Back','detail','quiet',icons.back)}<span>${esc(book.title)}</span><div>${button('Chapters','contents','icon',icons.menu)}${button('Appearance','settings','icon','Aa')}</div></header><div class="reading-meta">CHAPTER ${index+1} OF ${book.chapters.length} <span>·</span> ${esc(c.title)}</div><div class="page-window" tabindex="0" aria-label="Book pages"><article class="page-content">${chapterHTML(c)}</article></div><footer class="reader-footer"><div id="audio-controls" hidden><audio controls preload="auto" aria-label="Read-aloud playback"></audio></div><div id="listen-status" role="status" aria-live="polite"></div><div class="reader-tools">${button('Listen','speak','quiet',icons.play)}<span id="page-label" aria-live="polite"></span>${button('Settings','settings','quiet','Aa')}</div><div class="page-controls">${button('Previous page','prev','icon',icons.back)}<input type="range" id="page-range" min="0" max="1" value="0" aria-label="Reading page">${button('Next page','next','icon',icons.next)}</div></footer></main>`;applyPrefs();requestAnimationFrame(()=>paginate(offset));$('#page-range').oninput=e=>{stopSpeech();page=Number(e.target.value);updatePage();};let touchX=0,touchY=0;$('.page-window').ontouchstart=e=>{touchX=e.changedTouches[0].clientX;touchY=e.changedTouches[0].clientY;};$('.page-window').ontouchend=e=>{const dx=e.changedTouches[0].clientX-touchX,dy=e.changedTouches[0].clientY-touchY;if(Math.abs(dx)>55&&Math.abs(dx)>Math.abs(dy)*1.5)turn(dx<0?1:-1);};}
+function startReader(index,offset=0){stopSpeech();chapterIndex=index;page=0;reading=true;document.body.className='reader-mode';const c=book.chapters[index];app.innerHTML=`<main class="reader" data-theme="${esc(prefs.theme)}"><header class="reader-header">${button('Back','detail','quiet',icons.back)}<span>${esc(book.title)}</span><div>${button('Chapters','contents','icon',icons.menu)}${button('Appearance','settings','icon','Aa')}</div></header><div class="reading-meta">CHAPTER ${index+1} OF ${book.chapters.length} <span>·</span> ${esc(c.title)}</div><div class="page-window" tabindex="0" aria-label="Book pages"><article class="page-content">${chapterHTML(c)}</article></div><footer class="reader-footer"><div id="audio-controls" hidden><button id="listen-start-now" data-action="listen-start-now" class="secondary" hidden>Play now</button><audio controls preload="auto" aria-label="Read-aloud playback"></audio></div><div id="listen-status" role="status" aria-live="polite"></div><div class="reader-tools">${button('Listen','speak','quiet',icons.play)}<span id="page-label" aria-live="polite"></span>${button('Settings','settings','quiet','Aa')}</div><div class="page-controls">${button('Previous page','prev','icon',icons.back)}<input type="range" id="page-range" min="0" max="1" value="0" aria-label="Reading page">${button('Next page','next','icon',icons.next)}</div></footer></main>`;applyPrefs();requestAnimationFrame(()=>paginate(offset));$('#page-range').oninput=e=>{stopSpeech();page=Number(e.target.value);updatePage();};let touchX=0,touchY=0;$('.page-window').ontouchstart=e=>{touchX=e.changedTouches[0].clientX;touchY=e.changedTouches[0].clientY;};$('.page-window').ontouchend=e=>{const dx=e.changedTouches[0].clientX-touchX,dy=e.changedTouches[0].clientY-touchY;if(Math.abs(dx)>55&&Math.abs(dx)>Math.abs(dy)*1.5)turn(dx<0?1:-1);};}
 function applyPrefs(){const r=$('.reader');if(!r)return;r.dataset.theme=['paper','white','night','sage'].includes(prefs.theme)?prefs.theme:'paper';r.style.setProperty('--font-size',Math.min(36,Math.max(14,Number(prefs.size)||20))+'px');r.style.setProperty('--line',Math.min(2.4,Math.max(1.3,Number(prefs.line)||1.8)));r.style.setProperty('--reading-font',prefs.font==='sans'?'Arial, sans-serif':'Georgia, serif');r.style.setProperty('--reading-width',Math.min(900,Math.max(340,Number(prefs.width)||680))+'px');}
 function paginate(offset){if(!reading)return;const win=$('.page-window'),content=$('.page-content');const w=win.clientWidth;content.style.columnWidth=w+'px';content.style.height=win.clientHeight+'px';pages=Math.max(1,Math.round((content.scrollWidth+40)/(w+40)));page=Math.min(pages-1,Math.round((offset??page/Math.max(1,pages-1))*(pages-1)));updatePage();}
 function updatePage(){if(!reading)return;$('.page-content').style.transform=`translateX(-${page*($('.page-window').clientWidth+40)}px)`;$('#page-label').textContent=`${page+1} / ${pages}`;const range=$('#page-range');range.max=pages-1;range.value=page;$('[data-action="prev"]').disabled=page===0&&chapterIndex===0;$('[data-action="next"]').disabled=page===pages-1&&chapterIndex===book.chapters.length-1;const progress={chapter_id:book.chapters[chapterIndex].id,offset:pages>1?page/(pages-1):0};book.progress=progress;clearTimeout(updatePage.timer);const currentBookId=book.id;updatePage.timer=setTimeout(()=>api('/books/'+currentBookId+'/progress','PUT',progress).catch(e=>toast(e.message)),200);}
@@ -55,7 +56,8 @@ function showListeningPage(position){
 function listeningState(state){
   const b=$('[data-action="speak"]');if(b)b.textContent='Stop listening';
   const status=$('#listen-status');
-  if(status)status.textContent=state.loading?'Preparing audio…':`Listen mode · ${state.aheadReady} page${state.aheadReady===1?'':'s'} ready ahead`;
+  if(status)status.textContent=state.loading?'Preparing audio…':state.startupWaiting?`Building buffer · ${Math.round(state.readySeconds)}s ready`:`Listen mode · ${Math.round(state.bufferSeconds)}s buffered`;
+  const playNow=$('#listen-start-now');if(playNow)playNow.hidden=!state.startupWaiting||state.loading;
 }
 function waitForRetry(ms,signal){
   return new Promise((resolve,reject)=>{
@@ -80,26 +82,36 @@ async function generatePageAudio(position,signal){
     }
     if(response.status===429&&attempt<30){await response.body?.cancel();await waitForRetry(1000,signal);continue;}
     if(!response.ok){const data=await response.json();throw Error(data.error||'Could not generate speech.');}
-    return response.blob();
+    const blob=await response.blob();
+    const header=new DataView(await blob.slice(0,44).arrayBuffer());
+    const byteRate=header.byteLength>=32?header.getUint32(28,true):0;
+    return {blob,duration:byteRate>0?Math.max(0,(blob.size-44)/byteRate):0};
   }
 }
-function playPageAudio(blob,signal){
-  if(!blob)return Promise.resolve();
+function playPageAudio(audioData,signal,position){
+  if(!audioData)return Promise.resolve();
+  const {blob}=audioData;
   return new Promise((resolve,reject)=>{
     const audio=$('#audio-controls audio');
     const url=URL.createObjectURL(blob);
     let settled=false;
     const finish=error=>{
       if(settled)return;settled=true;
-      audio.removeEventListener('ended',ended);audio.removeEventListener('error',failed);
+      audio.removeEventListener('ended',ended);audio.removeEventListener('error',failed);audio.removeEventListener('timeupdate',follow);
       signal.removeEventListener('abort',aborted);
       audio.pause();audio.removeAttribute('src');audio.load();URL.revokeObjectURL(url);
       error?reject(error):resolve();
     };
+    const follow=()=>{
+      if(!audio.duration||!position.pageBreaks)return;
+      const fraction=audio.currentTime/audio.duration;
+      const marker=position.pageBreaks.findLast(boundary=>boundary.fraction<=fraction);
+      if(marker&&marker.page!==page)showListeningPage({...position,page:marker.page});
+    };
     const ended=()=>finish();
     const failed=()=>finish(Error('Could not play audio. Try device voices.'));
     const aborted=()=>finish(signal.reason);
-    audio.addEventListener('ended',ended,{once:true});audio.addEventListener('error',failed,{once:true});
+    audio.addEventListener('timeupdate',follow);audio.addEventListener('ended',ended,{once:true});audio.addEventListener('error',failed,{once:true});
     signal.addEventListener('abort',aborted,{once:true});
     if(signal.aborted){aborted();return;}
     audio.src=url;$('#audio-controls').hidden=false;
@@ -110,8 +122,8 @@ function speakDevicePage(position,generation){
   if(!speaking||generation!==speechGeneration)return;
   if(!position){stopSpeech();toast('You’ve reached the end of the book.');return;}
   showListeningPage(position);
-  const chunks=position.text.match(/[^.!?]+[.!?]*\s*/g)||[];
-  let index=0;
+  const chunks=position.text?[position.text]:[];
+  let index=0, spoken=0;
   const next=()=>{
     if(!speaking||generation!==speechGeneration)return;
     if(index>=chunks.length){
@@ -119,7 +131,13 @@ function speakDevicePage(position,generation){
       // Yield between empty pages rather than recursively traversing chapters.
       setTimeout(()=>speakDevicePage(upcoming,generation),0);return;
     }
-    const utterance=new SpeechSynthesisUtterance(chunks[index++]);
+    const chunk=chunks[index++], start=spoken;
+    spoken+=chunk.length;
+    const utterance=new SpeechSynthesisUtterance(chunk);
+    utterance.onboundary=event=>{
+      const marker=position.pageBreaks?.findLast(boundary=>boundary.offset<=start+event.charIndex);
+      if(generation===speechGeneration&&marker&&marker.page!==page)showListeningPage({...position,page:marker.page});
+    };
     utterance.rate=Number(prefs.rate)||1;
     utterance.voice=speechSynthesis.getVoices().find(v=>v.voiceURI===prefs.voice)||null;
     utterance.onend=next;
@@ -134,12 +152,15 @@ function speak(){
   if(speaking){stopSpeech();return;}
   if(prefs.engine!=='kokoro'&&!('speechSynthesis' in window)){toast('Device voices are not supported in this browser.');return;}
   try{
-    pageSource=createPageSource(book.chapters,$('.reader'),$('.page-window'),chapterHTML);
+    pageSource=createSpeechSource(book.chapters,$('.reader'),$('.page-window'),chapterHTML);
     const current=pageSource.at(chapterIndex,page);
     speaking=true;const generation=++speechGeneration;
     if(prefs.engine!=='kokoro'){speakDevicePage(current,generation);return;}
     listenSession=new ListenSession({
       nextPage:position=>pageSource.next(position),
+      maxEntries:64,
+      startupBufferSeconds:15,
+      canPrefetch:(current,next)=>next.endOrdinal<=current.pageOrdinal+5,
       generate:generatePageAudio,
       play:playPageAudio,
       onPage:showListeningPage,
@@ -151,7 +172,7 @@ function speak(){
   }catch(error){stopSpeech();toast(error.message);}
 }
 app.addEventListener('click',handleClick);modal.addEventListener('click',handleClick);
-async function handleClick(e){const b=e.target.closest('button');if(!b||b.disabled)return;try{if(b.dataset.book){await detail(b.dataset.book);return;}if(b.dataset.read){book=await api('/books/'+b.dataset.read);resume();return;}if(b.dataset.filter){filter=b.dataset.filter;library();return;}if(b.dataset.chapter!==undefined){startReader(Number(b.dataset.chapter));return;}if(b.dataset.editChapter){chapterForm(book.chapters.find(c=>c.id===b.dataset.editChapter));return;}if(b.dataset.deleteChapter){if(confirm('Delete this chapter? This cannot be undone.')){await api(`/books/${book.id}/chapters/${b.dataset.deleteChapter}`,'DELETE',{});modal.close();await detail(book.id);}return;}if(b.dataset.themeChoice){stopSpeech();prefs.theme=b.dataset.themeChoice;applyPrefs();savePrefs();modal.close();settings();return;}switch(b.dataset.action){case'close':modal.close();break;case'new-book':bookForm();break;case'edit-book':bookForm(book);break;case'add-chapter':chapterForm();break;case'library':books=await api('/books');library();break;case'logout':await api('/logout','POST',{});login();break;case'detail':await detail(book.id);break;case'delete-book':if(confirm(`Delete “${book.title}” and all its chapters? This cannot be undone.`)){await api('/books/'+book.id,'DELETE',{});books=await api('/books');library();}break;case'start':resume();break;case'prev':turn(-1);break;case'next':turn(1);break;case'settings':settings();break;case'speak':speak();break;case'contents':show(`${formHead('Chapters')}<div class="contents">${book.chapters.map((c,i)=>`<button data-jump="${i}" class="${i===chapterIndex?'selected':''}">${String(i+1).padStart(2,'0')} <span>${esc(c.title)}</span></button>`).join('')}</div>`);break;}if(b.dataset.jump!==undefined){modal.close();startReader(Number(b.dataset.jump));}}catch(e){toast(e.message);}}
+async function handleClick(e){const b=e.target.closest('button');if(!b||b.disabled)return;try{if(b.dataset.book){await detail(b.dataset.book);return;}if(b.dataset.read){book=await api('/books/'+b.dataset.read);resume();return;}if(b.dataset.filter){filter=b.dataset.filter;library();return;}if(b.dataset.chapter!==undefined){startReader(Number(b.dataset.chapter));return;}if(b.dataset.editChapter){chapterForm(book.chapters.find(c=>c.id===b.dataset.editChapter));return;}if(b.dataset.deleteChapter){if(confirm('Delete this chapter? This cannot be undone.')){await api(`/books/${book.id}/chapters/${b.dataset.deleteChapter}`,'DELETE',{});modal.close();await detail(book.id);}return;}if(b.dataset.themeChoice){stopSpeech();prefs.theme=b.dataset.themeChoice;applyPrefs();savePrefs();modal.close();settings();return;}switch(b.dataset.action){case'close':modal.close();break;case'new-book':bookForm();break;case'edit-book':bookForm(book);break;case'add-chapter':chapterForm();break;case'library':books=await api('/books');library();break;case'logout':await api('/logout','POST',{});login();break;case'detail':await detail(book.id);break;case'delete-book':if(confirm(`Delete “${book.title}” and all its chapters? This cannot be undone.`)){await api('/books/'+book.id,'DELETE',{});books=await api('/books');library();}break;case'start':resume();break;case'prev':turn(-1);break;case'next':turn(1);break;case'settings':settings();break;case'speak':speak();break;case'listen-start-now':listenSession?.beginPlayback();break;case'contents':show(`${formHead('Chapters')}<div class="contents">${book.chapters.map((c,i)=>`<button data-jump="${i}" class="${i===chapterIndex?'selected':''}">${String(i+1).padStart(2,'0')} <span>${esc(c.title)}</span></button>`).join('')}</div>`);break;}if(b.dataset.jump!==undefined){modal.close();startReader(Number(b.dataset.jump));}}catch(e){toast(e.message);}}
 function resume(){if(!book.chapters.length)return;const i=book.chapters.findIndex(c=>c.id===book.progress?.chapter_id);startReader(Math.max(0,i),i>=0?book.progress.offset:0);}
 modal.addEventListener('input',e=>{const key=e.target.dataset.pref;if(!key)return;const offset=page/Math.max(1,pages-1);prefs[key]=['font','voice','engine','kokoroVoice'].includes(key)?e.target.value:Number(e.target.value);if(key==='rate')$('#rate-output').textContent=prefs.rate+'×';if(key==='size')$('#size-output').textContent=prefs.size+'px';stopSpeech();applyPrefs();requestAnimationFrame(()=>paginate(offset));savePrefs();});
 window.addEventListener('keydown',e=>{if(!reading||modal.open||['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName))return;if(e.key==='ArrowRight'){e.preventDefault();turn(1);}if(e.key==='ArrowLeft'){e.preventDefault();turn(-1);}});

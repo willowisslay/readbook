@@ -1,8 +1,8 @@
-// A rolling window of the current page plus, at most, five future pages.
-// Generation is serial: the page being heard always gets priority over prefetch.
+// A bounded rolling speech queue. Sentence units use a visual-page horizon;
+// generation stays serial so imminent audio always has priority over prefetch.
 export class ListenSession {
-  constructor({ nextPage, generate, play, onPage, onState, onComplete, onError }) {
-    Object.assign(this, { nextPage, generate, play, onPage, onState, onComplete, onError });
+  constructor({ nextPage, generate, play, onPage, onState, onComplete, onError, canPrefetch = () => true, maxEntries = 6, startupBufferSeconds = 0 }) {
+    Object.assign(this, { nextPage, generate, play, onPage, onState, onComplete, onError, canPrefetch, maxEntries, startupBufferSeconds });
     this.entries = [];
     this.controller = new AbortController();
     this.active = false;
@@ -25,9 +25,9 @@ export class ListenSession {
   }
 
   fill() {
-    while (this.entries.length < 6) {
+    while (this.entries.length < this.maxEntries) {
       const next = this.nextPage(this.entries.at(-1).page);
-      if (!next) break;
+      if (!next || !this.canPrefetch(this.entries[0].page, next)) break;
       this.entries.push(this.entry(next));
     }
     this.notify();
@@ -36,11 +36,31 @@ export class ListenSession {
 
   notify() {
     if (!this.active) return;
+    this.checkStartup();
     this.onState?.({
       loading: this.entries[0]?.state !== 'ready',
       aheadReady: this.entries.slice(1).filter(entry => entry.state === 'ready').length,
       aheadTotal: this.entries.length - 1,
+      bufferSeconds: this.entries.slice(1).reduce((sum, entry) => sum + (entry.state === 'ready' ? entry.duration || 0 : 0), 0),
+      readySeconds: this.entries.reduce((sum, entry) => sum + (entry.state === 'ready' ? entry.duration || 0 : 0), 0),
+      startupWaiting: !!this.startupWaiting,
     });
+  }
+
+  checkStartup() {
+    if (!this.startupWaiting) return;
+    let seconds = 0;
+    for (const entry of this.entries.slice(1)) {
+      if (entry.state !== 'ready') break;
+      seconds += entry.duration || 0;
+    }
+    const settled = this.entries.every(entry => ['ready', 'failed'].includes(entry.state));
+    if (this.startNow || seconds >= this.startupBufferSeconds || settled || this.entries.some(entry => entry.state === 'failed')) this.allowStartup?.();
+  }
+
+  beginPlayback() {
+    this.startNow = true;
+    this.checkStartup();
   }
 
   async pump() {
@@ -55,6 +75,7 @@ export class ListenSession {
           const audio = await this.generate(entry.page, this.controller.signal);
           if (!this.active) return;
           entry.state = 'ready';
+          entry.duration = audio?.duration || 0;
           entry.resolve(audio);
         } catch (error) {
           if (!this.active) return;
@@ -77,9 +98,21 @@ export class ListenSession {
         this.notify();
         const audio = await entry.ready;
         if (!this.active) return;
-        await this.play(audio, this.controller.signal);
+        if (!this.started && this.startupBufferSeconds > 0) {
+          this.startupWaiting = true;
+          await new Promise(resolve => { this.allowStartup = resolve; this.notify(); });
+          this.startupWaiting = false;
+          if (!this.active) return;
+          this.notify();
+        }
+        this.started = true;
+        await this.play(audio, this.controller.signal, entry.page);
         if (!this.active) return;
         this.entries.shift(); // Release the page just heard before adding another.
+        if (!this.entries.length) {
+          const next = this.nextPage(entry.page);
+          if (next) this.entries.push(this.entry(next));
+        }
         if (this.entries.length) this.fill();
       }
       if (this.active) {
@@ -96,6 +129,7 @@ export class ListenSession {
   stop() {
     this.active = false;
     this.controller.abort();
+    this.allowStartup?.();
     for (const entry of this.entries) entry.reject(new DOMException('Stopped', 'AbortError'));
     this.entries.length = 0;
   }
