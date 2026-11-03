@@ -1,0 +1,15 @@
+services:
+  readbook:
+    build: .
+    restart: unless-stopped
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?Set a password of at least 12 characters}
+      COOKIE_SECURE: "true"
+      DATA_DIR: /data
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    volumes:
+      - readbook-data:/data
+volumes:
+  readbook-data:

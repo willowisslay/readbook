@@ -1,0 +1,35 @@
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+const dir=mkdtempSync(path.join(tmpdir(),'readbook-test-'));
+let proc,cookie='',base='http://127.0.0.1:3198';
+async function request(url,method='GET',body,authenticated=true){return fetch(base+url,{method,headers:{...(body!==undefined?{'Content-Type':'application/json'}:{}),...(authenticated?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});}
+before(async()=>{proc=spawn(process.execPath,['server.js'],{env:{...process.env,APP_PASSWORD:'a-good-test-password',COOKIE_SECURE:'false',DATA_DIR:dir,PORT:'3198'},stdio:['ignore','pipe','pipe']});await new Promise((resolve,reject)=>{proc.stdout.once('data',resolve);proc.once('exit',code=>reject(Error('Server exited '+code)));});});
+after(()=>{proc.kill();rmSync(dir,{recursive:true,force:true});});
+test('private library, CRUD, persistent preferences and progress, and validation',async()=>{
+assert.equal((await request('/api/books','GET',undefined,false)).status,401);
+assert.equal((await request('/api/tts','POST',{input:'Private text',voice:'af_heart',speed:1},false)).status,401);
+assert.equal((await request('/api/login','POST',{password:'wrong'},false)).status,401);
+let r=await request('/api/login','POST',{password:'a-good-test-password'},false);assert.equal(r.status,200);cookie=r.headers.get('set-cookie').split(';')[0];assert.match(r.headers.get('set-cookie'),/HttpOnly/);
+assert.deepEqual(await(await request('/api/tts')).json(),{available:true,builtin:true});
+assert.equal((await request('/api/tts','POST',{input:'Test',voice:'invalid',speed:1})).status,400);
+assert.equal((await request('/api/tts','POST',{input:'Test',voice:'af_heart',speed:9})).status,400);
+r=await request('/api/books','POST',{title:'A quiet book',description:'Description',cover:''});assert.equal(r.status,201);const book=(await r.json()).id;
+r=await request(`/api/books/${book}/chapters`,'POST',{title:'First',content:'# Hello\n\nA story.',format:'md',position:1});assert.equal(r.status,200);
+let b=await(await request('/api/books/'+book)).json();assert.equal(b.chapters.length,1);let chapter=b.chapters[0].id;
+assert.equal((await request(`/api/books/${book}/chapters/${chapter}`,'PUT',{title:'Revised',content:'Revised text',position:2,format:'txt'})).status,200);
+assert.equal((await request(`/api/books/${book}/progress`,'PUT',{chapter_id:chapter,offset:.5})).status,200);
+assert.equal((await request(`/api/books/${book}/progress`,'PUT',{chapter_id:chapter,offset:2})).status,400);
+assert.equal((await request('/api/preferences','PUT',{theme:'night',size:24})).status,200);assert.equal((await(await request('/api/preferences')).json()).size,24);
+b=await(await request('/api/books/'+book)).json();assert.equal(b.progress.offset,.5);assert.equal(b.chapters[0].title,'Revised');
+assert.equal((await request('/api/books/'+book,'PUT',{title:'Updated',description:'New',cover:'data:image/svg+xml;base64,xxx'})).status,400);
+assert.equal((await request('/api/books/'+book,'PUT',{title:'Updated',description:'New',cover:''})).status,200);
+assert.equal((await fetch(base+'/api/books',{method:'POST',headers:{'Content-Type':'application/json',Cookie:cookie,Origin:'https://evil.example'},body:'{}'})).status,403);
+assert.equal((await request(`/api/books/${book}/chapters/${chapter}`,'DELETE',{})).status,200);
+assert.equal((await request('/api/books/'+book,'DELETE',{})).status,200);assert.deepEqual(await(await request('/api/books')).json(),[]);
+assert.equal((await request('/api/logout','POST',{})).status,200);assert.equal((await request('/api/books')).status,401);
+});
+test('public page and security headers',async()=>{const r=await request('/');assert.equal(r.status,200);assert.match(r.headers.get('content-security-policy'),/frame-ancestors 'none'/);assert.equal(r.headers.get('cache-control'),'no-store');assert.equal((await request('/health')).status,200);});
