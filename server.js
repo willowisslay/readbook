@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS chapters(id TEXT PRIMARY KEY,book_id TEXT NOT NULL RE
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS progress(book_id TEXT PRIMARY KEY REFERENCES books(id) ON DELETE CASCADE,chapter_id TEXT,offset REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS preferences(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL);`);
-const assets=new Map(['index.html','app.js','style.css','icon.svg'].map(f=>['/'+(f==='index.html'?'':f),readFileSync(new URL('./public/'+f,import.meta.url))]));
-const types={'/':'text/html','/app.js':'text/javascript','/style.css':'text/css','/icon.svg':'image/svg+xml'};
+const assets=new Map(['index.html','app.js','listen-session.js','reading-pages.js','style.css','icon.svg'].map(f=>['/'+(f==='index.html'?'':f),readFileSync(new URL('./public/'+f,import.meta.url))]));
+const types={'/':'text/html','/app.js':'text/javascript','/listen-session.js':'text/javascript','/reading-pages.js':'text/javascript','/style.css':'text/css','/icon.svg':'image/svg+xml'};
 const hash=s=>createHash('sha256').update(s).digest(); const attempts=new Map();
 const id=()=>randomBytes(16).toString('hex');
 function text(v,max,required=false){if(typeof v!=='string'||v.length>max||(required&&!v.trim()))throw Object.assign(new Error('Please check the fields and upload sizes.'),{status:400});return v.trim();}
@@ -49,7 +49,13 @@ if(p==='/api/tts'&&req.method==='POST'){
 if(process.env.TTS_ENABLED==='false'){send(503,{error:'Built-in speech is disabled. Choose device voices.'});return;}
 const b=await body(req),input=text(b.input,6000,true),voice=text(b.voice||'af_heart',80,true);
 if(!/^[ab][fm]_[a-z0-9_]+$/.test(voice)||!Number.isFinite(b.speed)||b.speed<0.5||b.speed>2){send(400,{error:'Invalid voice or speed'});return;}
-const audio=await generateSpeech(input,voice,b.speed,dir);
+const controller=new AbortController();
+const disconnected=()=>{if(!res.writableEnded)controller.abort();};
+res.once('close',disconnected);
+let audio;
+try{audio=await generateSpeech(input,voice,b.speed,dir,controller.signal);}
+finally{res.removeListener('close',disconnected);}
+if(res.destroyed)return;
 res.writeHead(200,{'Content-Type':'audio/wav'});res.end(audio);return;
 }
 if(p==='/api/logout'&&req.method==='POST'){db.prepare('DELETE FROM sessions WHERE token=?').run(session.token);res.setHeader('Set-Cookie','readbook=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');send(200,{ok:true});return;}
@@ -71,6 +77,6 @@ const pm=p.match(/^\/api\/books\/([a-f0-9]+)\/progress$/);
 if(pm&&req.method==='PUT'){const b=await body(req);if(!db.prepare('SELECT id FROM chapters WHERE id=? AND book_id=?').get(b.chapter_id,pm[1])||!Number.isFinite(b.offset)||b.offset<0||b.offset>1){send(400,{error:'Invalid reading position'});return;}db.prepare('INSERT INTO progress VALUES(?,?,?) ON CONFLICT(book_id) DO UPDATE SET chapter_id=excluded.chapter_id,offset=excluded.offset').run(pm[1],b.chapter_id,b.offset);send(200,{ok:true});return;}
 if(p==='/api/preferences'){if(req.method==='GET'){send(200,JSON.parse(db.prepare('SELECT value FROM preferences WHERE id=1').get()?.value||'{}'));return;}if(req.method==='PUT'){const b=await body(req);if(JSON.stringify(b).length>4000){send(400,{error:'Preferences too large'});return;}db.prepare('INSERT INTO preferences VALUES(1,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(JSON.stringify(b));send(200,{ok:true});return;}}
 send(404,{error:'Not found'});
-}catch(e){if(!e.status)console.error(e);send(e.status||500,{error:e.status?e.message:'Something went wrong. Please try again.'});}
+}catch(e){if(res.destroyed)return;if(!e.status)console.error(e);send(e.status||500,{error:e.status?e.message:'Something went wrong. Please try again.'});}
 });
 server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Readbook listening on port '+(process.env.PORT||3000)));
