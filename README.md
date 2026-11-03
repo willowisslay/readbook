@@ -37,7 +37,7 @@ Sessions use random, HttpOnly, SameSite=Strict, secure cookies with a 30-day exp
 
 Covers accept PNG, JPEG, or WebP up to 4 MB. Chapters accept UTF-8 TXT or MD up to 2 MB. Markdown supports headings, paragraphs, emphasis, and blockquotes; raw HTML and external resources are not rendered. Set unique positive chapter order numbers for a precise sequence. Progress and settings are shared between devices for this single-user library. Reading requires a connection; this is not an offline ebook sync service.
 
-Read-aloud uses the Web Speech API and the voices available on the device. It reads the current page and stops when you turn pages. Voice availability, network use by system voices, background playback, and offline behavior depend on the browser/OS. Test on your actual phone; mobile browsers can suspend speech when the screen locks.
+The optional device-voice fallback uses the Web Speech API and the voices available on the device. It reads the current page and stops when you turn pages. Voice availability, network use by system voices, background playback, and offline behavior depend on the browser/OS. Test on your actual phone; mobile browsers can suspend speech when the screen locks.
 
 ## Built-in Kokoro voices
 
