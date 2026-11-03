@@ -10,13 +10,15 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test": "node --test",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "icons": "node scripts/build-icons.js"
   },
   "dependencies": {
     "@huggingface/transformers": "3.8.1",
     "kokoro-js": "1.2.1"
   },
   "devDependencies": {
-    "@playwright/test": "^1.64.1"
+    "@playwright/test": "^1.64.1",
+    "lucide-static": "^1.67.0"
   }
 }

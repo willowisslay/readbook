@@ -2,26 +2,28 @@ import { test, expect } from '@playwright/test';
 
 // Deterministic media lets tests finish pages individually, including while
 // generation is slow or playback is paused. Real Kokoro is verified separately.
-function silentWav() {
-  const buffer = Buffer.alloc(44 + 4800);
+function silentWav(seconds=.1) {
+  const bytes=Math.floor(seconds*48000);
+  const buffer = Buffer.alloc(44 + bytes);
   buffer.write('RIFF'); buffer.writeUInt32LE(buffer.length - 8, 4);
   buffer.write('WAVEfmt ', 8); buffer.writeUInt32LE(16, 16);
   buffer.writeUInt16LE(1, 20); buffer.writeUInt16LE(1, 22);
   buffer.writeUInt32LE(24000, 24); buffer.writeUInt32LE(48000, 28);
   buffer.writeUInt16LE(2, 32); buffer.writeUInt16LE(16, 34);
-  buffer.write('data', 36); buffer.writeUInt32LE(4800, 40);
+  buffer.write('data', 36); buffer.writeUInt32LE(bytes, 40);
   return buffer;
 }
-async function openBook(page) {
+async function openBook(page,{webAudio=false}={}) {
   await page.request.post('/api/login', { data: { password: 'browser-test-password' } });
-  await page.request.put('/api/preferences',{data:{engine:'kokoro',kokoroVoice:'af_heart',theme:'paper',size:20,line:1.8,font:'serif',width:680,rate:1,voice:''}});
+  await page.request.put('/api/preferences',{data:{ambience:'off',ambienceVolume:.25,voiceVolume:1,engine:'kokoro',kokoroVoice:'af_heart',theme:'paper',size:20,line:1.8,font:'serif',width:680,rate:1,voice:''}});
   const result = await page.request.post('/api/books', { data: { title: 'Listening test', description: '', cover: '' } });
   const { id } = await result.json();
   const paragraphs = Array.from({ length: 80 }, (_, i) => `Paragraph ${i + 1}. The evening light settled on the hills. A small path wound through the trees, inviting us to follow it somewhere new. We walked quietly, leaving the noise of the day behind.`);
   const source = paragraphs.join('\n\n');
   await page.request.post(`/api/books/${id}/chapters`, { data: { title: 'A long walk', content: source, format: 'txt', position: 1 } });
   await page.request.post(`/api/books/${id}/chapters`, { data: { title: 'Coming home', content: 'The final chapter. We are home at last.', format: 'txt', position: 2 } });
-  await page.addInitScript(() => {
+  await page.addInitScript(({webAudio}) => {
+    if(!webAudio){Object.defineProperty(window,'AudioContext',{configurable:true,value:undefined});Object.defineProperty(window,'webkitAudioContext',{configurable:true,value:undefined});}
     HTMLMediaElement.prototype.play = function () { return Promise.resolve(); };
     window.wakeRequests=0;window.wakeReleases=0;
     Object.defineProperty(navigator,'wakeLock',{configurable:true,value:{request:async type=>{
@@ -31,7 +33,7 @@ async function openBook(page) {
       sentinel.release=async()=>{window.wakeReleases++;sentinel.dispatchEvent(new Event('release'));};
       return sentinel;
     }}});
-  });
+  },{webAudio});
   await page.goto('/');
   await page.locator(`[data-book="${id}"]`).click();
   await page.getByRole('button', { name: 'Start reading', exact: true }).click();
@@ -99,7 +101,7 @@ test('speech prefetch stays five visual pages ahead and refills as playback adva
   await expect.poll(()=>requests.length).toBe(horizon(plan,nextPage));
   expect(requests[nextPage].input).toBe(plan[nextPage].text);
   await page.getByRole('button',{name:'Stop listening',exact:true}).click();
-  await expect(page.locator('#listen-status')).toBeEmpty();
+  await expect(page.locator('#listen-status')).toHaveText('Ready to listen');
   await expect(page.locator('.listen-measure')).toHaveCount(0);
   await page.locator('audio').evaluate(audio=>audio.dispatchEvent(new Event('ended')));
   await expect(page.locator('#page-label')).toContainText(`${plan[nextPage].page+1} /`);
@@ -139,6 +141,7 @@ test('font and voice changes discard the old queue and regenerate complete sente
   await expect.poll(()=>requests.length).toBe(horizon(plan));
   await page.getByRole('button',{name:'Appearance',exact:true}).click();
   await page.locator('[data-pref=size]').fill('28');
+  await page.getByRole('tab',{name:'Voice',exact:true}).click();
   await page.locator('[data-pref=kokoroVoice]').selectOption('bf_emma');
   await page.getByRole('button',{name:'Close',exact:true}).click();
   await expect(page.locator('.listen-measure')).toHaveCount(0);
@@ -181,6 +184,7 @@ test('device voices also continue across pages and chapters', async ({ page }) =
     input.value = input.max; input.dispatchEvent(new Event('input', { bubbles: true }));
   });
   await page.getByRole('button', { name: 'Appearance', exact: true }).click();
+  await page.getByRole('tab',{name:'Voice',exact:true}).click();
   await page.locator('[data-pref=engine]').selectOption('device');
   await page.getByRole('button', { name: 'Close', exact: true }).click();
   await page.getByRole('button', { name: 'Listen', exact: true }).click();
@@ -191,7 +195,7 @@ test('device voices also continue across pages and chapters', async ({ page }) =
   await expect.poll(() => page.evaluate(() => {
     window.mockSpeechQueue.shift()?.onend();
     return document.querySelector('[data-action=speak]').textContent.trim();
-  })).toBe('▷ Listen');
+  })).toBe('Listen');
   expect(requests).toHaveLength(0);
 });
 
@@ -292,6 +296,7 @@ test('Kokoro and device voices narrate cleaned prose while chapters stay unchang
     Object.defineProperty(window,'speechSynthesis',{configurable:true,value:{getVoices:()=>[],speak:utterance=>window.spoken.push(utterance.text),cancel:()=>{}}});
   });
   await page.getByRole('button',{name:'Appearance',exact:true}).click();
+  await page.getByRole('tab',{name:'Voice',exact:true}).click();
   await page.locator('[data-pref=engine]').selectOption('device');
   await page.getByRole('button',{name:'Close',exact:true}).click();
   await page.getByRole('button',{name:'Listen',exact:true}).click();
@@ -317,4 +322,108 @@ test('wake lock is reacquired on return and denial does not interrupt narration'
   await expect(page.locator('#toast')).toContainText('couldn’t keep the screen awake');
   await expect.poll(()=>page.evaluate(()=>window.wakeRequests)).toBe(3);
   await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+});
+
+test('the reader uses Lucide icons and one settings entry with keyboard-accessible tabs',async({page})=>{
+  await openBook(page);
+  await expect(page.getByRole('button',{name:'Appearance',exact:true})).toHaveCount(1);
+  await expect(page.getByRole('button',{name:'Settings',exact:true})).toHaveCount(0);
+  await expect(page.locator('.reader button .lucide').first()).toBeVisible();
+  await page.getByRole('button',{name:'Appearance',exact:true}).click();
+  await expect(page.getByRole('tab',{name:'Reading',exact:true})).toHaveAttribute('aria-selected','true');
+  await page.getByRole('tab',{name:'Reading',exact:true}).focus();await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tab',{name:'Voice',exact:true})).toBeFocused();
+  await expect(page.locator('[data-pref=kokoroVoice]')).toBeVisible();
+  await expect(page.locator('[data-pref=voice]')).toHaveCount(0);
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tab',{name:'Sounds',exact:true})).toBeFocused();
+  await expect(page.getByRole('group',{name:'Background sound'})).toBeVisible();
+  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await page.screenshot({path:'/workspace/readbook-refined-mobile.png'});
+});
+
+test('real Web Audio schedules narration ahead, keeps ambience during pause, and saves independent volumes',async({page})=>{
+  await page.addInitScript(()=>{
+    const Context=window.AudioContext||window.webkitAudioContext;
+    window.audioStarts=[];window.audioGains=[];window.audioContexts=[];
+    window.AudioContext=class extends Context{
+      constructor(...args){super(...args);window.audioContexts.push(this);}
+      createBufferSource(){const source=super.createBufferSource(),start=source.start.bind(source);source.start=(...args)=>{window.audioStarts.push({args,loop:source.loop});start(...args);};return source;}
+      createGain(){const gain=super.createGain();window.audioGains.push(gain);return gain;}
+    };
+  });
+  const {id}=await openBook(page,{webAudio:true});
+  await page.route('**/api/tts',async route=>{if(route.request().method()!=='POST'){await route.continue();return;}await route.fulfill({contentType:'audio/wav',body:silentWav(4)});});
+  await page.getByRole('button',{name:'Background sounds',exact:true}).click();
+  await page.getByRole('button',{name:/^Rain Soft rainfall/}).click();
+  await expect(page.locator('.sound-state')).toHaveText('Playing rain');
+  await page.locator('[data-mixer=ambienceVolume]').fill('0.2');
+  await page.getByRole('tab',{name:'Voice',exact:true}).click();
+  await page.locator('[data-mixer=voiceVolume]').fill('0.6');
+  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await page.getByRole('button',{name:'Listen',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Pause narration',exact:true})).toBeEnabled();
+  await expect.poll(()=>page.evaluate(()=>window.audioStarts.filter(source=>!source.loop&&source.args.length===3).length)).toBeGreaterThanOrEqual(2);
+  const starts=await page.evaluate(()=>window.audioStarts.filter(source=>!source.loop&&source.args.length===3).slice(0,2).map(source=>source.args));
+  expect(starts[1][0]).toBeCloseTo(starts[0][0]+starts[0][2],4);
+  await page.getByRole('button',{name:'Pause narration',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Resume narration',exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>window.audioContexts[0].state)).toBe('running');
+  await expect(page.locator('.sound-indicator')).toBeVisible();
+  await expect.poll(async()=>{const p=await(await page.request.get('/api/preferences')).json();return [p.ambience,p.ambienceVolume,p.voiceVolume];}).toEqual(['rain',.2,.6]);
+  const volumes=await page.evaluate(()=>window.audioGains.slice(0,2).map(gain=>gain.gain.value));
+  expect(volumes[0]).toBeCloseTo(.6,1);expect(volumes[1]).toBeCloseTo(.12,1);
+  await page.getByRole('button',{name:'Resume narration',exact:true}).click();
+  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+  await expect(page.locator('.sound-indicator')).toBeVisible();
+  await page.getByRole('button',{name:/^Background sounds/}).click();
+  await page.getByRole('button',{name:/^Forest Leaves/}).click();
+  await expect(page.locator('.sound-state')).toHaveText('Playing forest');
+  await page.getByRole('button',{name:/^Water Flowing/}).click();
+  await expect(page.locator('.sound-state')).toHaveText('Playing water');
+  await page.screenshot({path:'/workspace/readbook-sounds-mobile.png'});
+  await page.getByRole('button',{name:'Pause background',exact:true}).click();
+  await expect(page.locator('.sound-state')).toHaveText('Background paused');
+  await page.getByRole('button',{name:'Play background',exact:true}).click();
+  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await page.getByRole('button',{name:'Back',exact:true}).click();
+  await page.getByRole('button',{name:'Continue reading',exact:true}).click();
+  await expect(page.locator('.sound-indicator')).toBeHidden();
+  await page.getByRole('button',{name:'Back',exact:true}).click();
+  await page.getByRole('button',{name:'Library',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Your library',exact:true})).toBeVisible();
+  await page.setViewportSize({width:1440,height:1000});
+  await page.screenshot({path:'/workspace/readbook-refined-desktop.png'});
+});
+
+test('background sound fallback is clear and does not break native narration',async({page})=>{
+  await openBook(page);const requests=await mockSpeech(page);
+  await page.getByRole('button',{name:'Background sounds',exact:true}).click();
+  await page.getByRole('button',{name:/^Rain Soft rainfall/}).click();
+  await expect(page.locator('#toast')).toContainText('Background sounds aren’t supported');
+  await expect(page.locator('.sound-state')).toHaveText('Background paused');
+  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await page.getByRole('button',{name:'Listen',exact:true}).click();
+  await expect(page.locator('audio')).toHaveAttribute('src',/^blob:/);
+  await expect.poll(()=>requests.length).toBeGreaterThan(0);
+  await page.getByRole('button',{name:'Pause narration',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Resume narration',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Resume narration',exact:true}).click();
+  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+});
+
+test('reading settings fit a narrow phone and retain night-theme contrast',async({page})=>{
+  await openBook(page);
+  await page.setViewportSize({width:320,height:740});
+  await page.getByRole('button',{name:'Appearance',exact:true}).click();
+  await page.getByRole('button',{name:'night theme',exact:true}).click();
+  await expect(page.locator('dialog')).toHaveAttribute('data-theme','night');
+  const bounds=await page.locator('dialog').boundingBox();
+  expect(bounds.x).toBeGreaterThanOrEqual(0);expect(bounds.x+bounds.width).toBeLessThanOrEqual(320);
+  await page.getByRole('tab',{name:'Voice',exact:true}).click();
+  await expect(page.locator('[data-pref=kokoroVoice]')).toBeVisible();
+  expect(await page.evaluate(()=>document.querySelector('dialog').scrollWidth<=document.querySelector('dialog').clientWidth)).toBe(true);
+  await page.screenshot({path:'/workspace/readbook-night-mobile.png'});
+  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await expect(page.locator('.reader')).toHaveAttribute('data-theme','night');
 });

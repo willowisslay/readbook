@@ -106,7 +106,7 @@ export class ListenSession {
           this.notify();
         }
         this.started = true;
-        await this.play(audio, this.controller.signal, entry.page);
+        await this.play(audio, this.controller.signal, entry.page, this.entries[1]);
         if (!this.active) return;
         this.entries.shift(); // Release the page just heard before adding another.
         if (!this.entries.length) {
