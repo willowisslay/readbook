@@ -44,7 +44,7 @@ export function extractPageText(content, left, right) {
 
 // A sentence may cross a visual page. Speech follows the sentence; the visible
 // page advances at the next speech boundary rather than restarting the voice.
-export function createSpeechSource(chapters, reader, viewport, renderChapter) {
+export function createSpeechSource(chapters, reader, viewport, renderChapter, { preserveUnits = false } = {}) {
   const width = viewport.clientWidth, height = viewport.clientHeight;
   const window = document.createElement('div');
   window.className = 'page-window listen-measure';
@@ -67,21 +67,7 @@ export function createSpeechSource(chapters, reader, viewport, renderChapter) {
     if (plans.has(chapter)) return plans.get(chapter);
     content.innerHTML = renderChapter(chapters[chapter]);
     const pageCount = Math.max(1, Math.round((content.scrollWidth + 40) / (width + 40)));
-    const runs = [];
-    let text = '', previousBlock = null;
-    const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
-    let node;
-    while ((node = walker.nextNode())) {
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        if (node.tagName === 'BR') text += '\n';
-        continue;
-      }
-      const block = node.parentElement.closest('p,h1,h2,h3,h4,h5,h6,blockquote,li,pre,td,th');
-      if (text && block !== previousBlock && !text.endsWith('\n')) text += '\n';
-      runs.push({ start: text.length, end: text.length + node.length, node });
-      text += node.textContent;
-      previousBlock = block;
-    }
+    const { text, runs } = speechTextRuns(content);
     const origin = window.getBoundingClientRect().left;
     function pageAt(offset) {
       let low = 0, high = runs.length;
@@ -106,7 +92,7 @@ export function createSpeechSource(chapters, reader, viewport, renderChapter) {
         let end = unit.end;
         // Very small viewports can fit fewer than one long sentence in six
         // pages. Respect the horizon even for that exceptional case.
-        if (pageAt(end - 1) > firstPage + 5) {
+        if (!preserveUnits && pageAt(end - 1) > firstPage + 5) {
           let low = start + 1, high = end;
           while (low < high) {
             const middle = (low + high) >> 1;
@@ -199,4 +185,23 @@ export function createPageSource(chapters, reader, viewport, renderChapter) {
     },
     dispose() { window.remove(); },
   };
+}
+
+export function speechTextRuns(content) {
+  const runs = [];
+  let text = '', previousBlock = null;
+  const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      if (node.tagName === 'BR') text += '\n';
+      continue;
+    }
+    const block = node.parentElement.closest('p,h1,h2,h3,h4,h5,h6,blockquote,li,pre,td,th');
+    if (text && block !== previousBlock && !text.endsWith('\n')) text += '\n';
+    runs.push({ start: text.length, end: text.length + node.length, node });
+    text += node.textContent;
+    previousBlock = block;
+  }
+  return { text, runs };
 }

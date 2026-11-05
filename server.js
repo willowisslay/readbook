@@ -15,8 +15,9 @@ CREATE TABLE IF NOT EXISTS chapters(id TEXT PRIMARY KEY,book_id TEXT NOT NULL RE
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS progress(book_id TEXT PRIMARY KEY REFERENCES books(id) ON DELETE CASCADE,chapter_id TEXT,offset REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS preferences(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL);`);
-const assets=new Map(['index.html','app.js','listen-session.js','reading-pages.js','speech-chunks.js','speech-text.js','listening-wake-lock.js','icons.js','sound-mixer.js','narration-player.js','markdown.js','appearance.js','editor-actions.js','vendor/marked.js','vendor/purify.js','style.css','icon.svg'].map(f=>['/'+(f==='index.html'?'':f),readFileSync(new URL('./public/'+f,import.meta.url))]));
+const assets=new Map(['index.html','app.js','listen-session.js','reading-pages.js','speech-chunks.js','speech-text.js','listening-wake-lock.js','icons.js','sound-mixer.js','narration-player.js','markdown.js','appearance.js','editor-actions.js','vendor/marked.js','vendor/purify.js','style.css','icon.svg','offline-store.js','pwa.js','sw.js','manifest.webmanifest','icons/app-192.png','icons/app-512.png','icons/maskable-512.png','icons/apple-touch-icon.png'].map(f=>['/'+(f==='index.html'?'':f),readFileSync(new URL('./public/'+f,import.meta.url))]));
 const types={'/':'text/html','/app.js':'text/javascript','/listen-session.js':'text/javascript','/reading-pages.js':'text/javascript','/speech-chunks.js':'text/javascript','/speech-text.js':'text/javascript','/listening-wake-lock.js':'text/javascript','/icons.js':'text/javascript','/sound-mixer.js':'text/javascript','/narration-player.js':'text/javascript','/markdown.js':'text/javascript','/appearance.js':'text/javascript','/editor-actions.js':'text/javascript','/vendor/marked.js':'text/javascript','/vendor/purify.js':'text/javascript','/style.css':'text/css','/icon.svg':'image/svg+xml'};
+Object.assign(types,{'/offline-store.js':'text/javascript','/pwa.js':'text/javascript','/sw.js':'text/javascript','/manifest.webmanifest':'application/manifest+json','/icons/app-192.png':'image/png','/icons/app-512.png':'image/png','/icons/maskable-512.png':'image/png','/icons/apple-touch-icon.png':'image/png'});
 const hash=s=>createHash('sha256').update(s).digest(); const attempts=new Map();
 const id=()=>randomBytes(16).toString('hex');
 function text(v,max,required=false){if(typeof v!=='string'||v.length>max||(required&&!v.trim()))throw Object.assign(new Error('Please check the fields and upload sizes.'),{status:400});return v.trim();}
@@ -27,7 +28,7 @@ res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('X-Frame-Options
 const send=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(data));};
 try{
 const url=new URL(req.url,'http://localhost'), p=url.pathname;
-if(req.method==='GET'&&assets.has(p)){res.writeHead(200,{'Content-Type':types[p]});res.end(assets.get(p));return;}
+if(req.method==='GET'&&assets.has(p)){if(p==='/sw.js')res.setHeader('Service-Worker-Allowed','/');res.writeHead(200,{'Content-Type':types[p]});res.end(assets.get(p));return;}
 if(p==='/health'){send(200,{ok:true});return;}
 if(!p.startsWith('/api/')){send(404,{error:'Not found'});return;}
 if(!['GET','HEAD'].includes(req.method)){

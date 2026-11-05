@@ -6,6 +6,8 @@ COPY --chown=node:node package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --chown=node:node server.js tts.js tts-worker.js speech-cache.js audio.js ./
 COPY --chown=node:node public ./public
+COPY --chown=node:node scripts/build-sw.js ./scripts/build-sw.js
+RUN node scripts/build-sw.js
 RUN mkdir -p /data && chown node:node /data
 USER node
 VOLUME ["/data"]

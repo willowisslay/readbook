@@ -7,12 +7,14 @@
     "node": ">=24"
   },
   "scripts": {
+    "prestart": "node scripts/build-sw.js",
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test": "node --test",
     "test:browser": "playwright test",
     "icons": "node scripts/build-icons.js",
-    "vendor": "node scripts/build-vendor.js"
+    "vendor": "node scripts/build-vendor.js",
+    "service-worker": "node scripts/build-sw.js"
   },
   "dependencies": {
     "@huggingface/transformers": "3.8.1",
