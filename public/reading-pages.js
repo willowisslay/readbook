@@ -34,7 +34,7 @@ export function extractPageText(content, left, right) {
     const end = lowerBound(rect => rect.left >= right - 0.5);
     if (end > start) {
       // Preserve inline emphasis without inserting spaces inside words.
-      const block = node.parentElement.closest('p,h1,h2,h3,h4,h5,h6,blockquote');
+      const block = node.parentElement.closest('p,h1,h2,h3,h4,h5,h6,blockquote,li,pre,td,th');
       if (parts.length && block !== parts.at(-1).block) parts.push({ text: '\n', block });
       parts.push({ text: node.textContent.slice(start, end), block });
     }
@@ -76,7 +76,7 @@ export function createSpeechSource(chapters, reader, viewport, renderChapter) {
         if (node.tagName === 'BR') text += '\n';
         continue;
       }
-      const block = node.parentElement.closest('p,h1,h2,h3,h4,h5,h6,blockquote');
+      const block = node.parentElement.closest('p,h1,h2,h3,h4,h5,h6,blockquote,li,pre,td,th');
       if (text && block !== previousBlock && !text.endsWith('\n')) text += '\n';
       runs.push({ start: text.length, end: text.length + node.length, node });
       text += node.textContent;

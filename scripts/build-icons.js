@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 const root=new URL('../',import.meta.url);
 const all=JSON.parse(readFileSync(new URL('node_modules/lucide-static/icon-nodes.json',root),'utf8'));
-const names=['book-open','plus','arrow-left','arrow-right','sliders-horizontal','x','play','pause','list','pencil','trash','headphones','cloud-rain','trees','waves-horizontal','volume-2','volume-x','search','lock-keyhole','check','upload','square','chevron-right','chevron-left','type','circle-off'];
+const names=['book-open','plus','arrow-left','arrow-right','sliders-horizontal','x','play','pause','list','pencil','trash','headphones','cloud-rain','trees','waves-horizontal','volume-2','volume-x','search','lock-keyhole','check','upload','square','chevron-right','chevron-left','type','circle-off','heading-2','italic','quote','link-2','code','list-ordered','loader-circle','ellipsis'];
 const paths=Object.fromEntries(names.map(name=>{if(!all[name])throw Error('Missing icon '+name);return [name,all[name].map(([tag,attributes])=>`<${tag} ${Object.entries(attributes).map(([key,value])=>`${key}="${value}"`).join(' ')} />`).join('')];}));
 const license=readFileSync(new URL('node_modules/lucide-static/LICENSE',root),'utf8');
 writeFileSync(new URL('public/icons.js',root),`/* Lucide Icons · ISC License\n${license}*/\nconst paths=${JSON.stringify(paths,null,2)};\nexport function icon(name){return '<svg class="lucide" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'+(paths[name]||paths['book-open'])+'</svg>';}\n`);

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { appearanceDefaults } from '../public/appearance.js';
 
 // Deterministic media lets tests finish pages individually, including while
 // generation is slow or playback is paused. Real Kokoro is verified separately.
@@ -15,7 +16,7 @@ function silentWav(seconds=.1) {
 }
 async function openBook(page,{webAudio=false}={}) {
   await page.request.post('/api/login', { data: { password: 'browser-test-password' } });
-  await page.request.put('/api/preferences',{data:{ambience:'off',ambienceVolume:.25,voiceVolume:1,engine:'kokoro',kokoroVoice:'af_heart',theme:'paper',size:20,line:1.8,font:'serif',width:680,rate:1,voice:''}});
+  await page.request.put('/api/preferences',{data:{...appearanceDefaults,ambience:'off',ambienceVolume:.25,voiceVolume:1,engine:'kokoro',kokoroVoice:'af_heart',theme:'paper',size:20,line:1.8,font:'serif',width:680,rate:1,voice:''}});
   const result = await page.request.post('/api/books', { data: { title: 'Listening test', description: '', cover: '' } });
   const { id } = await result.json();
   const paragraphs = Array.from({ length: 80 }, (_, i) => `Paragraph ${i + 1}. The evening light settled on the hills. A small path wound through the trees, inviting us to follow it somewhere new. We walked quietly, leaving the noise of the day behind.`);
@@ -40,6 +41,20 @@ async function openBook(page,{webAudio=false}={}) {
   await expect(page.locator('#page-label')).toContainText('1 /');
   return { id, source };
 }
+async function closeSheet(page){await page.getByRole('button',{name:'Close',exact:true}).click();await expect(page.locator('dialog')).not.toBeVisible();}
+async function stopListening(page){
+  if(!await page.locator('dialog').isVisible())await page.getByRole('button',{name:'Playback controls',exact:true}).click();
+  else if(!await page.getByRole('button',{name:'Stop listening',exact:true}).isVisible())await page.getByRole('tab',{name:'Voice',exact:true}).click();
+  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+  await closeSheet(page);
+}
+async function jumpLast(page){
+  await page.getByRole('button',{name:'Chapters',exact:true}).click();
+  await page.locator('#page-range').evaluate(input=>{input.value=input.max;input.dispatchEvent(new Event('input',{bubbles:true}));});
+  const value=await currentPage(page);
+  await closeSheet(page);return value;
+}
+async function currentPage(page){return Number((await page.locator('#page-label').textContent()).split('/')[0].trim())-1;}
 async function mockSpeech(page) {
   const requests = [];
   await page.route('**/api/tts', async route => {
@@ -100,7 +115,7 @@ test('speech prefetch stays five visual pages ahead and refills as playback adva
   await expect(page.locator('#page-label')).toContainText(`${plan[nextPage].page+1} /`);
   await expect.poll(()=>requests.length).toBe(horizon(plan,nextPage));
   expect(requests[nextPage].input).toBe(plan[nextPage].text);
-  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+  await stopListening(page);
   await expect(page.locator('#listen-status')).toHaveText('Ready to listen');
   await expect(page.locator('.listen-measure')).toHaveCount(0);
   await page.locator('audio').evaluate(audio=>audio.dispatchEvent(new Event('ended')));
@@ -110,10 +125,7 @@ test('speech prefetch stays five visual pages ahead and refills as playback adva
 test('automatically enters the next chapter, saves progress, and stops at the end of the book', async ({ page }) => {
   const { id } = await openBook(page);
   const requests = await mockSpeech(page);
-  await page.locator('#page-range').evaluate(input => {
-    input.value = input.max; input.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-  const start=Number(await page.locator('#page-range').inputValue());
+  const start=await jumpLast(page);
   const plan=await speechPlan(page,id,start);
   await page.getByRole('button', { name: 'Listen', exact: true }).click();
   await expect.poll(() => requests.length).toBe(plan.length);
@@ -143,9 +155,9 @@ test('font and voice changes discard the old queue and regenerate complete sente
   await page.locator('[data-pref=size]').fill('28');
   await page.getByRole('tab',{name:'Voice',exact:true}).click();
   await page.locator('[data-pref=kokoroVoice]').selectOption('bf_emma');
-  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await closeSheet(page);
   await expect(page.locator('.listen-measure')).toHaveCount(0);
-  const updated=await speechPlan(page,id,Number(await page.locator('#page-range').inputValue()));
+  const updated=await speechPlan(page,id,await currentPage(page));
   const before=requests.length;
   await page.getByRole('button',{name:'Listen',exact:true}).click();
   await expect.poll(()=>requests.length).toBe(before+horizon(updated));
@@ -180,13 +192,11 @@ test('device voices also continue across pages and chapters', async ({ page }) =
   });
   await openBook(page);
   const requests = await mockSpeech(page);
-  await page.locator('#page-range').evaluate(input => {
-    input.value = input.max; input.dispatchEvent(new Event('input', { bubbles: true }));
-  });
+  await jumpLast(page);
   await page.getByRole('button', { name: 'Appearance', exact: true }).click();
   await page.getByRole('tab',{name:'Voice',exact:true}).click();
   await page.locator('[data-pref=engine]').selectOption('device');
-  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  await closeSheet(page);
   await page.getByRole('button', { name: 'Listen', exact: true }).click();
   await expect.poll(() => page.evaluate(() => {
     window.mockSpeechQueue.shift()?.onend();
@@ -229,7 +239,7 @@ test('sentences cross visual pages intact and page tracking does not restart the
   const {id,source}=await openBook(page);
   await page.getByRole('button',{name:'Appearance',exact:true}).click();
   await page.locator('[data-pref=size]').fill('36');
-  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await closeSheet(page);
   const plan=await speechPlan(page,id);
   expect(plan.map(unit=>unit.text).join(' ').replace(/\s+/g,' ')).toBe((source+' The final chapter. We are home at last.').replace(/\s+/g,' '));
   expect(plan.every(unit=>unit.text.endsWith('.'))).toBe(true);
@@ -269,7 +279,7 @@ test('startup buffering offers Play now when the first group is ready', async ({
   await page.getByRole('button',{name:'Play now',exact:true}).click();
   await expect(page.locator('audio')).toHaveAttribute('src',/^blob:/);
   await expect(page.getByRole('button',{name:'Play now',exact:true})).toBeHidden();
-  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+  await stopListening(page);
   release();
 });
 
@@ -289,7 +299,7 @@ test('Kokoro and device voices narrate cleaned prose while chapters stay unchang
   await expect(page.locator('.page-content').first()).toContainText(raw);
   expect((await(await page.request.get(`/api/books/${id}`)).json()).chapters[0].content).toBe(raw);
   await expect.poll(()=>page.evaluate(()=>window.wakeRequests)).toBe(1);
-  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+  await stopListening(page);
   await expect.poll(()=>page.evaluate(()=>window.wakeReleases)).toBe(1);
   await page.evaluate(()=>{
     window.spoken=[];
@@ -298,11 +308,11 @@ test('Kokoro and device voices narrate cleaned prose while chapters stay unchang
   await page.getByRole('button',{name:'Appearance',exact:true}).click();
   await page.getByRole('tab',{name:'Voice',exact:true}).click();
   await page.locator('[data-pref=engine]').selectOption('device');
-  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await closeSheet(page);
   await page.getByRole('button',{name:'Listen',exact:true}).click();
   expect(await page.evaluate(()=>window.spoken[0])).toBe(expected);
   await expect.poll(()=>page.evaluate(()=>window.wakeRequests)).toBe(2);
-  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+  await stopListening(page);
   await expect.poll(()=>page.evaluate(()=>window.wakeReleases)).toBe(2);
 });
 
@@ -314,14 +324,14 @@ test('wake lock is reacquired on return and denial does not interrupt narration'
   await expect.poll(()=>page.evaluate(()=>window.wakeReleases)).toBe(1);
   await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});document.dispatchEvent(new Event('visibilitychange'));});
   await expect.poll(()=>page.evaluate(()=>window.wakeRequests)).toBe(2);
-  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+  await stopListening(page);
   await expect.poll(()=>page.evaluate(()=>window.wakeReleases)).toBe(2);
   await page.evaluate(()=>{navigator.wakeLock.request=async()=>{window.wakeRequests++;throw new DOMException('Denied','NotAllowedError');};});
   await page.getByRole('button',{name:'Listen',exact:true}).click();
   await expect(page.locator('audio')).toHaveAttribute('src',/^blob:/);
   await expect(page.locator('#toast')).toContainText('couldn’t keep the screen awake');
   await expect.poll(()=>page.evaluate(()=>window.wakeRequests)).toBe(3);
-  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+  await stopListening(page);
 });
 
 test('the reader uses Lucide icons and one settings entry with keyboard-accessible tabs',async({page})=>{
@@ -338,7 +348,7 @@ test('the reader uses Lucide icons and one settings entry with keyboard-accessib
   await page.keyboard.press('ArrowRight');
   await expect(page.getByRole('tab',{name:'Sounds',exact:true})).toBeFocused();
   await expect(page.getByRole('group',{name:'Background sound'})).toBeVisible();
-  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await closeSheet(page);
   await page.screenshot({path:'/workspace/readbook-refined-mobile.png'});
 });
 
@@ -360,7 +370,7 @@ test('real Web Audio schedules narration ahead, keeps ambience during pause, and
   await page.locator('[data-mixer=ambienceVolume]').fill('0.2');
   await page.getByRole('tab',{name:'Voice',exact:true}).click();
   await page.locator('[data-mixer=voiceVolume]').fill('0.6');
-  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await closeSheet(page);
   await page.getByRole('button',{name:'Listen',exact:true}).click();
   await expect(page.getByRole('button',{name:'Pause narration',exact:true})).toBeEnabled();
   await expect.poll(()=>page.evaluate(()=>window.audioStarts.filter(source=>!source.loop&&source.args.length===3).length)).toBeGreaterThanOrEqual(2);
@@ -374,7 +384,7 @@ test('real Web Audio schedules narration ahead, keeps ambience during pause, and
   const volumes=await page.evaluate(()=>window.audioGains.slice(0,2).map(gain=>gain.gain.value));
   expect(volumes[0]).toBeCloseTo(.6,1);expect(volumes[1]).toBeCloseTo(.12,1);
   await page.getByRole('button',{name:'Resume narration',exact:true}).click();
-  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+  await stopListening(page);
   await expect(page.locator('.sound-indicator')).toBeVisible();
   await page.getByRole('button',{name:/^Background sounds/}).click();
   await page.getByRole('button',{name:/^Forest Leaves/}).click();
@@ -385,7 +395,7 @@ test('real Web Audio schedules narration ahead, keeps ambience during pause, and
   await page.getByRole('button',{name:'Pause background',exact:true}).click();
   await expect(page.locator('.sound-state')).toHaveText('Background paused');
   await page.getByRole('button',{name:'Play background',exact:true}).click();
-  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await closeSheet(page);
   await page.getByRole('button',{name:'Back',exact:true}).click();
   await page.getByRole('button',{name:'Continue reading',exact:true}).click();
   await expect(page.locator('.sound-indicator')).toBeHidden();
@@ -402,14 +412,14 @@ test('background sound fallback is clear and does not break native narration',as
   await page.getByRole('button',{name:/^Rain Soft rainfall/}).click();
   await expect(page.locator('#toast')).toContainText('Background sounds aren’t supported');
   await expect(page.locator('.sound-state')).toHaveText('Background paused');
-  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await closeSheet(page);
   await page.getByRole('button',{name:'Listen',exact:true}).click();
   await expect(page.locator('audio')).toHaveAttribute('src',/^blob:/);
   await expect.poll(()=>requests.length).toBeGreaterThan(0);
   await page.getByRole('button',{name:'Pause narration',exact:true}).click();
   await expect(page.getByRole('button',{name:'Resume narration',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Resume narration',exact:true}).click();
-  await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+  await stopListening(page);
 });
 
 test('reading settings fit a narrow phone and retain night-theme contrast',async({page})=>{
@@ -424,6 +434,122 @@ test('reading settings fit a narrow phone and retain night-theme contrast',async
   await expect(page.locator('[data-pref=kokoroVoice]')).toBeVisible();
   expect(await page.evaluate(()=>document.querySelector('dialog').scrollWidth<=document.querySelector('dialog').clientWidth)).toBe(true);
   await page.screenshot({path:'/workspace/readbook-night-mobile.png'});
-  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await closeSheet(page);
   await expect(page.locator('.reader')).toHaveAttribute('data-theme','night');
+});
+
+test('pasted Markdown saves without a file and shares rich rendering with preview and reading',async({page})=>{
+  const {id}=await openBook(page);
+  await page.getByRole('button',{name:'Back',exact:true}).click();
+  await page.getByRole('button',{name:'Add chapter',exact:true}).click();
+  expect(await page.locator('#chapter-file').evaluate(input=>input.required)).toBe(false);
+  await page.getByLabel('Chapter title',{exact:true}).fill('Pasted Markdown');
+  const content='# A beginning\n\nA **bold** and _quiet_ story.\n\n- First\n- Second\n\n> Keep going.\n\n[More](https://example.com)\n\n```js\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Moon | 42 |';
+  await page.getByLabel('Chapter text',{exact:true}).fill(content);
+  await page.getByRole('tab',{name:'Preview',exact:true}).click();
+  const preview=page.locator('#chapter-preview');
+  await expect(preview.locator('h1')).toHaveText('A beginning');
+  await expect(preview.locator('strong')).toHaveText('bold');
+  await expect(preview.locator('em')).toHaveText('quiet');
+  await expect(preview.locator('li')).toHaveCount(2);
+  await expect(preview.locator('blockquote')).toContainText('Keep going.');
+  await expect(preview.locator('pre code')).toContainText('const answer = 42;');
+  await expect(preview.locator('table')).toContainText('Moon');
+  await page.screenshot({path:'/workspace/readbook-editor-mobile.png'});
+  await page.getByRole('button',{name:'Save chapter',exact:true}).click();
+  await expect(page.locator('dialog')).not.toBeVisible();
+  const book=await(await page.request.get(`/api/books/${id}`)).json();
+  const chapter=book.chapters.find(chapter=>chapter.title==='Pasted Markdown');
+  expect(chapter.format).toBe('md');expect(chapter.content).toBe(content);
+  await page.locator('.chapter-open').filter({hasText:'Pasted Markdown'}).click();
+  await expect(page.locator('.page-content h1')).toHaveText('A beginning');
+  await expect(page.locator('.page-content strong')).toHaveText('bold');
+  await expect(page.locator('.page-content table')).toContainText('Moon');
+});
+
+test('Markdown toolbar and keyboard shortcuts format pasted text; import remains optional',async({page})=>{
+  await openBook(page);await page.getByRole('button',{name:'Back',exact:true}).click();
+  await page.getByRole('button',{name:'Add chapter',exact:true}).click();
+  await page.getByLabel('Chapter title',{exact:true}).fill('Formatting tools');
+  const textarea=page.getByLabel('Chapter text',{exact:true});
+  await textarea.fill('A quiet story.');
+  await textarea.evaluate(input=>input.setSelectionRange(2,7));
+  await page.getByRole('button',{name:'Bold',exact:true}).click();
+  await expect(textarea).toHaveValue('A **quiet** story.');
+  await textarea.press('Control+i');
+  await expect(textarea).toHaveValue('A **_quiet_** story.');
+  await page.getByRole('tab',{name:'Preview',exact:true}).click();
+  await expect(page.locator('#chapter-preview strong em')).toHaveText('quiet');
+  await page.getByRole('tab',{name:'Write',exact:true}).click();
+  await page.locator('#chapter-file').setInputFiles({name:'Optional.md',mimeType:'text/markdown',buffer:Buffer.from('## Imported heading\n\nStill editable.')});
+  await expect(textarea).toHaveValue('## Imported heading\n\nStill editable.');
+  await textarea.fill('');await page.getByRole('tab',{name:'Preview',exact:true}).click();
+  await page.getByRole('button',{name:'Save chapter',exact:true}).click();
+  await expect(textarea).toBeVisible();await expect(page.locator('.form-error')).toContainText('Add some chapter text');
+});
+
+test('Markdown preview strips executable content and never loads remote images',async({page})=>{
+  await openBook(page);await page.getByRole('button',{name:'Back',exact:true}).click();await page.getByRole('button',{name:'Add chapter',exact:true}).click();
+  let external=0;await page.route('https://example.invalid/**',route=>{external++;return route.abort();});
+  await page.getByLabel('Chapter text',{exact:true}).fill('<script>window.markdownExecuted=true</script>\n\n<img src="https://example.invalid/test.png" onerror="window.markdownExecuted=true">\n\n[Unsafe](javascript:alert(1))\n\n![A description](https://example.invalid/cover.png)\n\n**Safe prose**');
+  await page.getByRole('tab',{name:'Preview',exact:true}).click();
+  const preview=page.locator('#chapter-preview');
+  await expect(preview.locator('script,img,svg,iframe')).toHaveCount(0);
+  await expect(preview.locator('a[href^="javascript:"]')).toHaveCount(0);
+  await expect(preview.locator('strong')).toHaveText('Safe prose');
+  expect(await page.evaluate(()=>window.markdownExecuted)).toBeUndefined();expect(external).toBe(0);
+});
+
+test('compact audio chrome leaves reading space and expanded appearance choices persist',async({page})=>{
+  await openBook(page);
+  expect((await page.locator('.reader-footer').boundingBox()).height).toBeLessThanOrEqual(65);
+  await expect(page.locator('.reader .speech-timeline')).toHaveCount(0);
+  await expect(page.locator('.reader #speech-range')).toHaveCount(0);
+  await page.screenshot({path:'/workspace/readbook-compact-reader-mobile.png'});
+  await page.getByRole('button',{name:'Appearance',exact:true}).click();
+  await expect(page.locator('[data-theme-choice]')).toHaveCount(8);
+  await expect(page.locator('[data-pref=font] option')).toHaveCount(6);
+  await page.getByRole('button',{name:'sepia theme',exact:true}).click();
+  await page.locator('[data-pref=font]').selectOption('palatino');
+  await page.locator('[data-pref=size]').fill('24');
+  await page.getByText('Spacing & layout',{exact:true}).click();
+  await page.locator('[data-pref=align]').selectOption('justify');
+  await page.locator('[data-pref=paragraphSpace]').fill('1.2');
+  await page.locator('[data-pref=letterSpace]').fill('0.3');
+  await page.locator('[data-pref=gutter]').fill('16');
+  await page.locator('[data-pref=weight]').selectOption('500');
+  await page.getByRole('button',{name:'Blue',exact:true}).click();
+  await page.getByText('Custom colours',{exact:true}).click();
+  await page.locator('[data-pref=customColors]').check();
+  await page.locator('[data-pref=pageColor]').fill('#ece4d9');
+  await page.locator('[data-pref=inkColor]').fill('#182128');
+  await page.screenshot({path:'/workspace/readbook-appearance-mobile.png'});
+  await closeSheet(page);
+  const style=await page.locator('.page-content').evaluate(element=>({font:getComputedStyle(element).fontFamily,align:getComputedStyle(element).textAlign,weight:getComputedStyle(element).fontWeight,letters:getComputedStyle(element).letterSpacing}));
+  expect(style.font).toContain('Palatino');expect(style.align).toBe('justify');expect(style.weight).toBe('500');expect(style.letters).toBe('0.3px');
+  await expect.poll(async()=>{const preferences=await(await page.request.get('/api/preferences')).json();return [preferences.font,preferences.paragraphSpace,preferences.accent,preferences.pageColor,preferences.inkColor];}).toEqual(['palatino',1.2,'#436c9e','#ece4d9','#182128']);
+  await page.getByRole('button',{name:'Appearance',exact:true}).click();await page.getByRole('button',{name:'Reset appearance',exact:true}).click();
+  await expect(page.locator('[data-pref=font]')).toHaveValue('serif');await expect(page.locator('[data-pref=size]')).toHaveValue('20');
+});
+
+test('reduced-motion preferences disable sheet and page animations',async({page})=>{
+  await page.emulateMedia({reducedMotion:'reduce'});await openBook(page);
+  await page.getByRole('button',{name:'Appearance',exact:true}).click();
+  expect(await page.locator('dialog').evaluate(element=>element.getAnimations().length)).toBe(0);
+  await closeSheet(page);await page.getByRole('button',{name:'Next page',exact:true}).click();
+  expect(await page.locator('.page-window').evaluate(element=>element.getAnimations().length)).toBe(0);
+});
+
+test('chapter editing is full screen on a narrow phone and heading insertion is ready for typing',async({page})=>{
+  const {id}=await openBook(page);await page.getByRole('button',{name:'Back',exact:true}).click();await page.getByRole('button',{name:'Add chapter',exact:true}).click();
+  await page.setViewportSize({width:320,height:740});
+  const bounds=await page.locator('dialog').boundingBox();
+  expect(bounds.x).toBeCloseTo(0,0);expect(bounds.width).toBeCloseTo(320,0);expect(bounds.height).toBeCloseTo(740,0);
+  await page.getByLabel('Chapter title',{exact:true}).fill('A typed heading');
+  await page.getByRole('button',{name:'Heading',exact:true}).click();
+  await page.getByLabel('Chapter text',{exact:true}).pressSequentially('A new beginning');
+  await expect(page.getByLabel('Chapter text',{exact:true})).toHaveValue('## A new beginning');
+  await page.getByRole('tab',{name:'Preview',exact:true}).click();await expect(page.locator('#chapter-preview h2')).toHaveText('A new beginning');
+  await page.getByRole('button',{name:'Save chapter',exact:true}).click();await expect(page.locator('dialog')).not.toBeVisible();
+  const book=await(await page.request.get(`/api/books/${id}`)).json();expect(book.chapters.at(-1).content).toBe('## A new beginning');
 });

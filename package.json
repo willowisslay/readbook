@@ -11,7 +11,8 @@
     "dev": "node --watch server.js",
     "test": "node --test",
     "test:browser": "playwright test",
-    "icons": "node scripts/build-icons.js"
+    "icons": "node scripts/build-icons.js",
+    "vendor": "node scripts/build-vendor.js"
   },
   "dependencies": {
     "@huggingface/transformers": "3.8.1",
@@ -19,6 +20,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
-    "lucide-static": "^1.67.0"
+    "dompurify": "^3.4.17",
+    "lucide-static": "^1.67.0",
+    "marked": "^18.1.3"
   }
 }
